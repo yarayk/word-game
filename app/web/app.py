@@ -1,6 +1,5 @@
-from aiohttp.web import (
-    Application as AiohttpApplication,
-)
+import yaml
+from aiohttp.web import Application as AiohttpApplication
 
 from .routes import setup_routes
 
@@ -31,5 +30,27 @@ def setup_app(config_path: str) -> Application:
     Returns:
         Application: Настроенный экземпляр приложения.
     """
+    # Загружаем конфиг
+    with open(config_path) as f:
+        app.config = yaml.safe_load(f)
+
+    # Создаём store
+    from app.store.store import Store
+    app.store = Store(app)
+
+    # Регистрируем маршруты
     setup_routes(app)
+
+    # Хуки запуска и остановки
+    app.on_startup.append(_on_startup)
+    app.on_cleanup.append(_on_cleanup)
+
     return app
+
+
+async def _on_startup(application: Application) -> None:
+    await application.store.poller.start()
+
+
+async def _on_cleanup(application: Application) -> None:
+    await application.store.poller.stop()
