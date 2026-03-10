@@ -1,6 +1,8 @@
 import yaml
 from aiohttp.web import Application as AiohttpApplication
 
+from app.store.store import Store
+
 from .routes import setup_routes
 
 __all__ = ("Application",)
@@ -35,8 +37,7 @@ def setup_app(config_path: str) -> Application:
         app.config = yaml.safe_load(f)
 
     # Создаём store
-    from app.store.store import Store
-    app.store = Store(app)
+        app.store = Store(app)
 
     # Регистрируем маршруты
     setup_routes(app)

@@ -1,12 +1,11 @@
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
 class MessageFrom:
     id: int
     first_name: str
-    username: Optional[str] = None
+    username: str | None = None
 
 
 @dataclass
@@ -20,7 +19,7 @@ class Message:
     message_id: int
     from_: MessageFrom
     chat: Chat
-    text: Optional[str] = None
+    text: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Message":
@@ -42,11 +41,15 @@ class Message:
 @dataclass
 class Update:
     update_id: int
-    message: Optional[Message] = None
+    message: Message | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Update":
         return cls(
             update_id=data["update_id"],
-            message=Message.from_dict(data["message"]) if "message" in data else None,
+            message=(
+                Message.from_dict(data["message"])
+                if "message" in data
+                else None
+            ),
         )
