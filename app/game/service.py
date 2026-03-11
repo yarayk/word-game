@@ -128,7 +128,11 @@ class GameService:
         # Проверяем первую букву
         required = self._get_required_letter(game.current_word)
         if word[0] != required:
-            return {"ok": False, "reason": "wrong_letter", "required": required}
+            return {
+                "ok": False,
+                "reason": "wrong_letter",
+                "required": required,
+            }
 
         # Проверяем что слово не использовалось
         used = await self.accessor.get_used_words(game.id)
@@ -209,11 +213,17 @@ class GameService:
         # Проверяем остался ли один игрок
         active_players = await self.accessor.get_active_players(game.id)
         if len(active_players) <= 1:
-            return await self._finish_game(game, active_players)
+            return await self._finish_game(
+                game,
+                active_players,
+                accepted=accepted,
+                eliminated_player=(player if not accepted else None),
+            )
 
         # Переходим к следующему игроку
+        eliminated_order = player.turn_order if not accepted else None
         next_player = self._get_next_player(
-            active_players, game.current_player_id
+            active_players, game.current_player_id, eliminated_order
         )
         game.status = GameStatus.IN_GAME
         game.current_player_id = next_player.user_id
@@ -222,14 +232,18 @@ class GameService:
         )
         await self.accessor.update_game(game)
 
-        return {
+        result: dict = {
             "ok": True,
             "accepted": accepted,
             "approvals": approvals,
             "total": total_voters,
             "next_player": next_player,
             "winner": None,
+            "remaining_count": len(active_players),
         }
+        if not accepted:
+            result["eliminated_player"] = player
+        return result
 
     async def eliminate_on_timeout(self, chat_id: int) -> dict:
         """Выбивает игрока по таймауту хода."""
@@ -237,7 +251,9 @@ class GameService:
         if not game or game.status != GameStatus.IN_GAME:
             return {"ok": False}
 
-        player = await self.accessor.get_player(game.id, game.current_player_id)
+        player = await self.accessor.get_player(
+            game.id, game.current_player_id
+        )
         player.is_active = False
         player.eliminated_at = datetime.now(UTC)
         await self.accessor.update_player(player)
@@ -247,7 +263,7 @@ class GameService:
             return await self._finish_game(game, active_players)
 
         next_player = self._get_next_player(
-            active_players, game.current_player_id
+            active_players, game.current_player_id, player.turn_order
         )
         game.current_player_id = next_player.user_id
         game.status = GameStatus.IN_GAME
@@ -261,6 +277,7 @@ class GameService:
             "eliminated": player,
             "next_player": next_player,
             "winner": None,
+            "remaining_count": len(active_players),
         }
 
     async def stop_game(self, chat_id: int) -> dict:
@@ -278,7 +295,13 @@ class GameService:
 
     # ── Вспомогательные методы ────────────────────────────────────────
 
-    async def _finish_game(self, game: Game, active_players: list) -> dict:
+    async def _finish_game(
+        self,
+        game: Game,
+        active_players: list,
+        accepted: bool = True,
+        eliminated_player=None,
+    ) -> dict:
         """Завершает игру."""
         game.status = GameStatus.FINISHED
         game.finished_at = datetime.now(UTC)
@@ -286,12 +309,15 @@ class GameService:
 
         scoreboard = await self.accessor.get_scoreboard(game.id)
         winner = active_players[0] if active_players else None
-        return {
+        result: dict = {
             "ok": True,
-            "accepted": True,
+            "accepted": accepted,
             "winner": winner,
             "scoreboard": scoreboard,
         }
+        if eliminated_player is not None:
+            result["eliminated_player"] = eliminated_player
+        return result
 
     def _get_required_letter(self, word: str) -> str:
         """Возвращает букву с которой должно начинаться следующее слово."""
@@ -300,9 +326,24 @@ class GameService:
                 return ch
         return word[-1]
 
-    def _get_next_player(self, players: list, current_user_id: int) -> Player:
-        """Возвращает следующего игрока по кругу."""
+    def _get_next_player(
+        self,
+        players: list,
+        current_user_id: int,
+        eliminated_turn_order: int | None = None,
+    ) -> Player:
+        """Возвращает следующего игрока по кругу.
+
+        Если current_user_id уже не в списке (был выбыт), ищет первого
+        игрока с turn_order > eliminated_turn_order, иначе — первого по кругу.
+        players должен быть отсортирован по turn_order.
+        """
         for i, p in enumerate(players):
             if p.user_id == current_user_id:
                 return players[(i + 1) % len(players)]
+        # Игрок выбыл — ищем следующего по turn_order
+        if eliminated_turn_order is not None:
+            for p in players:  # уже отсортированы по turn_order
+                if p.turn_order > eliminated_turn_order:
+                    return p
         return players[0]

@@ -20,6 +20,7 @@ class TimerManager:
     def __init__(self, app: Application):
         self.app = app
         self._timers: dict[int, asyncio.Task] = {}
+        self._reminder_timers: dict[int, asyncio.Task] = {}
 
     @property
     def turn_timeout(self) -> int:
@@ -36,16 +37,21 @@ class TimerManager:
     def cancel(self, chat_id: int) -> None:
         if task := self._timers.pop(chat_id, None):
             task.cancel()
+        if task := self._reminder_timers.pop(chat_id, None):
+            task.cancel()
 
     def start_turn_timer(
         self, chat_id: int, delay: float | None = None
     ) -> None:
         self.cancel(chat_id)
+        effective = delay if delay is not None else self.turn_timeout
         self._timers[chat_id] = asyncio.create_task(
-            self._turn_timeout(
-                chat_id, delay if delay is not None else self.turn_timeout
-            )
+            self._turn_timeout(chat_id, effective)
         )
+        if effective > 10:
+            self._reminder_timers[chat_id] = asyncio.create_task(
+                self._reminder_timeout(chat_id, effective / 2)
+            )
 
     def start_vote_timer(
         self, chat_id: int, delay: float | None = None
@@ -61,6 +67,9 @@ class TimerManager:
         for task in self._timers.values():
             task.cancel()
         self._timers.clear()
+        for task in self._reminder_timers.values():
+            task.cancel()
+        self._reminder_timers.clear()
 
     async def restore_timers(self) -> None:
         """Восстанавливает таймеры после рестарта по дедлайнам из БД."""
@@ -94,10 +103,11 @@ class TimerManager:
 
         eliminated = result.get("eliminated")
         if eliminated:
+            remaining = result.get("remaining_count", 0)
             await self.app.store.tg_client.send_message(
                 chat_id,
                 f"⏰ {eliminated.first_name} не успел назвать слово"
-                " и выбывает.",
+                f" и выбывает. Осталось {remaining} игроков.",
             )
 
         if result.get("winner"):
@@ -122,6 +132,10 @@ class TimerManager:
 
     async def _vote_timeout(self, chat_id: int, delay: float) -> None:
         await asyncio.sleep(delay)
+
+        game = await self.app.store.game.get_active_game(chat_id)
+        vote_message_id = game.vote_message_id if game else None
+
         try:
             result = await self.app.store.game_service.resolve_vote(chat_id)
         except Exception:
@@ -132,12 +146,43 @@ class TimerManager:
             return
 
         accepted = result.get("accepted")
-        verdict = "⏰ Время голосования вышло! " + (
-            "✅ Слово принято!" if accepted else "❌ Слово отклонено!"
-        )
-        await self.app.store.tg_client.send_message(chat_id, verdict)
+        has_winner = bool(result.get("winner"))
+        elim = result.get("eliminated_player")
 
-        if result.get("winner"):
+        if not accepted and elim:
+            if has_winner:
+                winner = result["winner"]
+                verdict = (
+                    f"⏰ Время голосования вышло!\n"
+                    f"Такого слова не существует.\n"
+                    f"❌ {elim.first_name} выбыл.\n"
+                    f"🏆 Победитель: {winner.first_name}!"
+                )
+            else:
+                game = await self.app.store.game.get_active_game(chat_id)
+                players = (
+                    await self.app.store.game.get_active_players(game.id)
+                    if game
+                    else []
+                )
+                names = ", ".join(p.first_name for p in players) or "—"
+                verdict = (
+                    f"⏰ Время голосования вышло!\n"
+                    f"Такого слова не существует.\n"
+                    f"❌ {elim.first_name} выбыл.\n"
+                    f"Остались: {names}"
+                )
+        else:
+            verdict = "⏰ Время голосования вышло! ✅ Слово принято!"
+
+        if vote_message_id:
+            await self.app.store.tg_client.edit_message_text(
+                chat_id, vote_message_id, verdict
+            )
+        else:
+            await self.app.store.tg_client.send_message(chat_id, verdict)
+
+        if has_winner:
             winner = result["winner"]
             await self.app.store.tg_client.send_message(
                 chat_id,
@@ -157,6 +202,25 @@ class TimerManager:
             )
             self.start_turn_timer(chat_id)
 
+    async def _reminder_timeout(self, chat_id: int, delay: float) -> None:
+        await asyncio.sleep(delay)
+        game = await self.app.store.game.get_active_game(chat_id)
+        if not game or game.status != GameStatus.IN_GAME:
+            return
+        player = await self.app.store.game.get_player(
+            game.id, game.current_player_id
+        )
+        if not player:
+            return
+        mention = (
+            f"@{player.username}" if player.username else player.first_name
+        )
+        remaining = int(delay)
+        await self.app.store.tg_client.send_message(
+            chat_id,
+            f"⏳ {mention}, твой ход! Осталось {remaining} сек.",
+        )
+
 
 def _format_scoreboard(players) -> str:
     if not players:
@@ -167,6 +231,8 @@ def _format_scoreboard(players) -> str:
 
     for i, player in enumerate(players):
         medal = medals[i] if i < 3 else f"{i + 1}."
-        lines.append(f"{medal} {player.first_name} — {int(player.score)} очков")
+        lines.append(
+            f"{medal} {player.first_name} — {int(player.score)} очков"
+        )
 
     return "\n".join(lines)
