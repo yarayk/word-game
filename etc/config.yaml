@@ -13,4 +13,8 @@ bot:
 store:
   database_url: "postgresql+asyncpg://postgres:SDRvr123@localhost/wordsbot"
 
+game:
+  turn_timeout: 60
+  vote_timeout: 30
+
 
