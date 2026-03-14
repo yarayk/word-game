@@ -8,6 +8,8 @@ if TYPE_CHECKING:
 
 class Store:
     def __init__(self, app: Application):
+        from app.game.accessor import GameAccessor
+        from app.game.service import GameService
         from app.store.database.database import Database
         from app.tg.client import TgClient
         from app.tg.poller import Poller
@@ -17,3 +19,5 @@ class Store:
         self.tg_client = TgClient(app)
         self.poller = Poller(app)
         self.database = Database(app)
+        self.game = GameAccessor(app)
+        self.game_service = GameService(app)
