@@ -46,6 +46,8 @@ class Game(Base):
     vote_deadline: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    vote_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    lobby_message_id: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

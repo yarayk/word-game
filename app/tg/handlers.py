@@ -3,22 +3,68 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from app.tg.dataclasses import Update
+from app.store.database.models import GameStatus
+from app.tg.dataclasses import CallbackQuery, Update
 
 if TYPE_CHECKING:
     from app.web.app import Application
 
 logger = logging.getLogger(__name__)
 
+_VOTE_KEYBOARD = {
+    "inline_keyboard": [
+        [
+            {"text": "✅ Да", "callback_data": "vote:yes"},
+            {"text": "❌ Нет", "callback_data": "vote:no"},
+        ]
+    ]
+}
+
+_LOBBY_KEYBOARD = {
+    "inline_keyboard": [
+        [
+            {"text": "🙋 Присоединиться", "callback_data": "lobby:join"},
+            {"text": "▶️ Начать игру", "callback_data": "lobby:begin"},
+        ]
+    ]
+}
+
+
+def _build_lobby_text(players: list) -> str:
+    if not players:
+        player_list = "— никого пока нет"
+    else:
+        player_list = "\n".join(f"• {p.first_name}" for p in players)
+    return (
+        "🎮 Игра в Слова!\n\n"
+        f"Игроки ({len(players)}):\n"
+        f"{player_list}\n\n"
+        "Нажми кнопку чтобы присоединиться!"
+    )
+
 
 async def handle_update(update: Update, app: Application) -> None:
-    if update.message is None:
+    if update.callback_query is not None:
+        cq = update.callback_query
+        if cq.data.startswith("vote:"):
+            await handle_vote_callback(cq, app)
+        elif cq.data.startswith("lobby:"):
+            await handle_lobby_callback(cq, app)
         return
 
-    logger.debug("handle_update: text=%s", update.message.text)
+    if update.message is not None:
+        await _handle_message(update.message, app)
 
-    message = update.message
+
+async def _handle_message(message, app: Application) -> None:
+    logger.debug("handle_update: text=%s", message.text)
+
     chat_id = message.chat.id
+
+    if any(m.is_bot for m in message.new_chat_members):
+        await handle_bot_added(chat_id, app)
+        return
+
     user_id = message.from_.id
     first_name = message.from_.first_name
     username = message.from_.username
@@ -37,10 +83,26 @@ async def handle_update(update: Update, app: Application) -> None:
         await handle_stop_game(chat_id, app)
     elif text.startswith("/game_info"):
         await handle_game_info(chat_id, app)
-    elif text in ("+", "-"):
-        await handle_vote(chat_id, user_id, text == "+", app)
     elif not text.startswith("/"):
         await handle_word(chat_id, user_id, text, app)
+
+
+async def handle_bot_added(chat_id: int, app: Application) -> None:
+    await app.store.tg_client.send_message(
+        chat_id,
+        "👋 Привет! Я бот для игры в Слова.\n\n"
+        "📖 Правила:\n"
+        "Игроки по очереди называют слова. Каждое следующее слово должно "
+        "начинаться на последнюю букву предыдущего. Другие игроки голосуют "
+        "— существует ли названное слово. Кто не успел назвать слово или "
+        "назвал несуществующее — выбывает. Побеждает последний оставшийся!\n\n"
+        "📋 Команды:\n"
+        "/start_game — начать новую игру\n"
+        "/join — присоединиться к игре\n"
+        "/begin — запустить игру (нужно ≥ 2 игрока)\n"
+        "/stop_game — досрочно завершить игру\n"
+        "/game_info — информация о текущей игре",
+    )
 
 
 async def handle_start_game(chat_id: int, app: Application) -> None:
@@ -52,12 +114,12 @@ async def handle_start_game(chat_id: int, app: Application) -> None:
         )
         return
 
-    await app.store.tg_client.send_message(
-        chat_id,
-        "🎮 Новая игра в Слова!\n\n"
-        "Присоединяйтесь командой /join\n"
-        "Когда все готовы — /begin",
+    message_id = await app.store.tg_client.send_message(
+        chat_id, _build_lobby_text([]), _LOBBY_KEYBOARD
     )
+    if message_id:
+        game.lobby_message_id = message_id
+        await app.store.game.update_game(game)
 
 
 async def handle_join(
@@ -79,20 +141,38 @@ async def handle_join(
         return
 
     if already_joined:
-        await app.store.tg_client.send_message(
-            chat_id,
-            f"{first_name}, ты уже в игре!",
-        )
+        if not game.lobby_message_id:
+            await app.store.tg_client.send_message(
+                chat_id, f"{first_name}, ты уже в игре!"
+            )
         return
 
     players = await app.store.game.get_active_players(game.id)
-    await app.store.tg_client.send_message(
-        chat_id,
-        f"✅ {first_name} присоединился!\nИгроков: {len(players)}",
-    )
+    if game.lobby_message_id:
+        await app.store.tg_client.edit_message_text(
+            chat_id,
+            game.lobby_message_id,
+            _build_lobby_text(players),
+            reply_markup=_LOBBY_KEYBOARD,
+        )
+    else:
+        await app.store.tg_client.send_message(
+            chat_id,
+            f"✅ {first_name} присоединился!\nИгроков: {len(players)}",
+        )
 
 
 async def handle_begin(chat_id: int, app: Application) -> None:
+    game = await app.store.game.get_active_game(chat_id)
+    if game is None:
+        await app.store.tg_client.send_message(
+            chat_id,
+            "Нельзя начать игру. "
+            "Нужно минимум 2 игрока и открытая игра (/start_game).",
+        )
+        return
+
+    lobby_message_id = game.lobby_message_id
     result = await app.store.game_service.begin_game(chat_id)
 
     if result is None:
@@ -103,17 +183,76 @@ async def handle_begin(chat_id: int, app: Application) -> None:
         )
         return
 
-    game, first_player = result
-    required = app.store.game_service._get_required_letter(game.current_word)
+    await _send_game_started(chat_id, result, lobby_message_id, app)
 
-    await app.store.tg_client.send_message(
-        chat_id,
-        f"🎮 Игра началась!\n\n"
-        f"Первое слово: {game.current_word}\n"
-        f"Ход: {first_player.first_name}\n"
-        f"Назови слово на букву «{required}»",
-    )
-    app.store.timer.start_turn_timer(chat_id)
+
+async def handle_lobby_callback(
+    callback_query: CallbackQuery, app: Application
+) -> None:
+    chat_id = callback_query.message.chat.id
+    action = callback_query.data.split(":", 1)[1]
+
+    if action == "join":
+        user_id = callback_query.from_.id
+        first_name = callback_query.from_.first_name
+        username = callback_query.from_.username
+
+        game, already_joined = await app.store.game_service.join_game(
+            chat_id, user_id, first_name, username
+        )
+
+        if game is None:
+            await app.store.tg_client.answer_callback_query(
+                callback_query.id,
+                text="Нет открытой игры.",
+                show_alert=True,
+            )
+            return
+
+        if already_joined:
+            await app.store.tg_client.answer_callback_query(
+                callback_query.id,
+                text="Ты уже в игре!",
+                show_alert=True,
+            )
+            return
+
+        await app.store.tg_client.answer_callback_query(callback_query.id)
+
+        players = await app.store.game.get_active_players(game.id)
+        if game.lobby_message_id:
+            await app.store.tg_client.edit_message_text(
+                chat_id,
+                game.lobby_message_id,
+                _build_lobby_text(players),
+                reply_markup=_LOBBY_KEYBOARD,
+            )
+
+    elif action == "begin":
+        game = await app.store.game.get_active_game(chat_id)
+        if game is None or game.status != GameStatus.WAITING:
+            await app.store.tg_client.answer_callback_query(
+                callback_query.id,
+                text="Нет открытой игры.",
+                show_alert=True,
+            )
+            return
+
+        players = await app.store.game.get_active_players(game.id)
+        if len(players) < 2:
+            await app.store.tg_client.answer_callback_query(
+                callback_query.id,
+                text="Нужно минимум 2 игрока!",
+                show_alert=True,
+            )
+            return
+
+        await app.store.tg_client.answer_callback_query(callback_query.id)
+
+        lobby_message_id = game.lobby_message_id
+        result = await app.store.game_service.begin_game(chat_id)
+        if result is not None:
+            await _send_game_started(chat_id, result, lobby_message_id, app)
 
 
 async def handle_stop_game(chat_id: int, app: Application) -> None:
@@ -192,65 +331,139 @@ async def handle_word(
 
     player = result["player"]
     game = await app.store.game.get_active_game(chat_id)
+    players = await app.store.game.get_active_players(game.id)
+    total_voters = len(players) - 1
 
-    await app.store.tg_client.send_message(
-        chat_id,
+    vote_text = (
         f"🗳 {player.first_name} называет слово: {game.pending_word}\n"
         f"Голосуйте — существует ли это слово?\n"
-        f"Напишите + или - в чат",
+        f"Проголосовало: 0 из {total_voters}"
     )
+    message_id = await app.store.tg_client.send_message(
+        chat_id, vote_text, _VOTE_KEYBOARD
+    )
+    if message_id:
+        game.vote_message_id = message_id
+        await app.store.game.update_game(game)
+
     app.store.timer.start_vote_timer(chat_id)
 
 
-async def handle_vote(
-    chat_id: int, voter_id: int, approve: bool, app: Application
+async def handle_vote_callback(
+    callback_query: CallbackQuery, app: Application
 ) -> None:
+    chat_id = callback_query.message.chat.id
+    voter_id = callback_query.from_.id
+    approve = callback_query.data == "vote:yes"
+
     result = await app.store.game_service.cast_vote(chat_id, voter_id, approve)
 
     if not result["ok"]:
         reason = result.get("reason")
-        if reason == "no_voting":
-            await app.store.tg_client.send_message(
-                chat_id, "Голосование сейчас не идёт."
-            )
-        elif reason == "own_word":
-            await app.store.tg_client.send_message(
-                chat_id, "Нельзя голосовать за своё слово."
-            )
+        if reason == "own_word":
+            alert = "Нельзя голосовать за своё слово."
         elif reason == "already_voted":
-            await app.store.tg_client.send_message(
-                chat_id, "Ты уже проголосовал."
-            )
+            alert = "Ты уже проголосовал."
+        else:
+            alert = None
+        await app.store.tg_client.answer_callback_query(
+            callback_query.id, text=alert, show_alert=bool(alert)
+        )
         return
 
-    # Проверяем — все ли проголосовали
+    await app.store.tg_client.answer_callback_query(callback_query.id)
+
     game = await app.store.game.get_active_game(chat_id)
     if game is None:
         return
 
     players = await app.store.game.get_active_players(game.id)
     votes = await app.store.game.get_votes(game.id, game.pending_word)
-
-    # Голосуют все кроме того кто назвал слово
     total_voters = len(players) - 1
 
+    if game.vote_message_id:
+        await app.store.tg_client.edit_message_text(
+            chat_id,
+            game.vote_message_id,
+            f"🗳 Слово: {game.pending_word}\n"
+            f"Голосуйте — существует ли это слово?\n"
+            f"Проголосовало: {len(votes)} из {total_voters}",
+            reply_markup=_VOTE_KEYBOARD,
+        )
+
     if len(votes) >= total_voters:
-        # Все проголосовали — подводим итог
+        vote_message_id = game.vote_message_id
+        app.store.timer.cancel(chat_id)
         result = await app.store.game_service.resolve_vote(chat_id)
-        await _send_vote_result(chat_id, result, app)
+        await _send_vote_result(chat_id, result, app, vote_message_id)
+
+
+async def _send_game_started(
+    chat_id: int,
+    result: tuple,
+    lobby_message_id: int | None,
+    app: Application,
+) -> None:
+    game, first_player = result
+    required = app.store.game_service._get_required_letter(game.current_word)
+    start_text = (
+        f"🎮 Игра началась!\n\n"
+        f"Первое слово: {game.current_word}\n"
+        f"Ход: {first_player.first_name}\n"
+        f"Назови слово на букву «{required}»"
+    )
+    if lobby_message_id:
+        await app.store.tg_client.edit_message_text(
+            chat_id, lobby_message_id, start_text
+        )
+    else:
+        await app.store.tg_client.send_message(chat_id, start_text)
+    app.store.timer.start_turn_timer(chat_id)
 
 
 async def _send_vote_result(
-    chat_id: int, result: dict, app: Application
+    chat_id: int,
+    result: dict,
+    app: Application,
+    vote_message_id: int | None = None,
 ) -> None:
     if not result["ok"]:
         return
 
     accepted = result.get("accepted")
-    verdict = "✅ Слово принято!" if accepted else "❌ Слово отклонено!"
-    await app.store.tg_client.send_message(chat_id, verdict)
+    has_winner = bool(result.get("winner"))
+    elim = result.get("eliminated_player")
 
-    if result.get("winner"):
+    if not accepted and elim:
+        if has_winner:
+            winner = result["winner"]
+            verdict = (
+                f"Такого слова не существует.\n"
+                f"❌ {elim.first_name} выбыл.\n"
+                f"🏆 Победитель: {winner.first_name}!"
+            )
+        else:
+            game = await app.store.game.get_active_game(chat_id)
+            players = (
+                await app.store.game.get_active_players(game.id) if game else []
+            )
+            names = ", ".join(p.first_name for p in players) or "—"
+            verdict = (
+                f"Такого слова не существует.\n"
+                f"❌ {elim.first_name} выбыл.\n"
+                f"Остались: {names}"
+            )
+    else:
+        verdict = "✅ Слово принято!"
+
+    if vote_message_id:
+        await app.store.tg_client.edit_message_text(
+            chat_id, vote_message_id, verdict
+        )
+    else:
+        await app.store.tg_client.send_message(chat_id, verdict)
+
+    if has_winner:
         winner = result["winner"]
         await app.store.tg_client.send_message(
             chat_id,
