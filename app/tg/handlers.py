@@ -96,7 +96,7 @@ async def _route_command(
     elif text.startswith("/join"):
         await handle_join(chat_id, user_id, first_name, username, app)
     elif text.startswith("/begin"):
-        await handle_begin(chat_id, app)
+        await handle_begin(chat_id, user_id, app)
     elif text.startswith("/stop_game"):
         await handle_stop_game(chat_id, app)
     elif text.startswith("/game_info"):
@@ -139,7 +139,8 @@ async def handle_bot_added(chat_id: int, app: Application) -> None:
         "/join — присоединиться к игре\n"
         "/begin — запустить игру (нужно ≥ 2 игрока)\n"
         "/stop_game — досрочно завершить игру\n"
-        "/game_info — информация о текущей игре",
+        "/game_info — информация о текущей игре\n"
+        "/help — показать эту справку",
     )
 
 
@@ -200,13 +201,21 @@ async def handle_join(
         )
 
 
-async def handle_begin(chat_id: int, app: Application) -> None:
+async def handle_begin(chat_id: int, user_id: int, app: Application) -> None:
     game = await app.store.game.get_active_game(chat_id)
     if game is None:
         await app.store.tg_client.send_message(
             chat_id,
             "Нельзя начать игру. "
             "Нужно минимум 2 игрока и открытая игра (/start_game).",
+        )
+        return
+
+    player = await app.store.game.get_player(game.id, user_id)
+    if player is None:
+        await app.store.tg_client.send_message(
+            chat_id,
+            "❌ Только участники игры могут её начать. Сначала нажми /join.",
         )
         return
 
@@ -272,6 +281,16 @@ async def handle_lobby_callback(
             await app.store.tg_client.answer_callback_query(
                 callback_query.id,
                 text="Нет открытой игры.",
+                show_alert=True,
+            )
+            return
+
+        requester_id = callback_query.from_.id
+        requester = await app.store.game.get_player(game.id, requester_id)
+        if requester is None:
+            await app.store.tg_client.answer_callback_query(
+                callback_query.id,
+                text="Только участники игры могут её начать.",
                 show_alert=True,
             )
             return
