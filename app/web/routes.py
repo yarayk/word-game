@@ -9,6 +9,8 @@ def setup_routes(application: Application):
     Args:
         application: Экземпляр приложения aiohttp.
     """
+    import app.admin.routes
     import app.users.routes
 
     app.users.routes.register_urls(application)
+    app.admin.routes.register_urls(application)
