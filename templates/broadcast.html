@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Слова — Рассылка</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0f14;color:#e2e8f0;font-family:'JetBrains Mono',monospace;min-height:100vh;padding:32px}
+h1{font-size:1.5rem;font-weight:700;color:#4f8ef7;margin-bottom:8px}
+.subtitle{color:#64748b;font-size:.8rem;margin-bottom:32px}
+a.back{display:inline-block;color:#64748b;font-size:.8rem;text-decoration:none;margin-bottom:24px}
+a.back:hover{color:#4f8ef7}
+.card{background:#151820;border:1px solid #1e2433;border-radius:8px;padding:24px;max-width:560px}
+label{display:block;font-size:.7rem;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+textarea{width:100%;background:#0d0f14;border:1px solid #1e2433;border-radius:6px;color:#e2e8f0;font-family:'JetBrains Mono',monospace;font-size:.9rem;padding:12px;resize:vertical;min-height:140px;outline:none;transition:border-color .15s}
+textarea:focus{border-color:#4f8ef7}
+button{margin-top:16px;background:#4f8ef7;color:#0d0f14;border:none;border-radius:6px;padding:10px 24px;font-family:'JetBrains Mono',monospace;font-size:.85rem;font-weight:700;cursor:pointer;transition:opacity .15s}
+button:hover{opacity:.85}
+button:disabled{opacity:.4;cursor:not-allowed}
+.result{margin-top:16px;font-size:.85rem;padding:12px;border-radius:6px;display:none}
+.result.ok{background:#0d2a1e;border:1px solid #3ecf8e;color:#3ecf8e}
+.result.err{background:#2a0d0d;border:1px solid #f87171;color:#f87171}
+</style>
+</head>
+<body>
+<a class="back" href="/admin">← Назад</a>
+<h1>📢 Рассылка</h1>
+<p class="subtitle">Сообщение будет отправлено во все чаты где когда-либо проходила игра</p>
+<div class="card">
+  <label for="msg">Текст сообщения</label>
+  <textarea id="msg" placeholder="Введите текст рассылки..."></textarea>
+  <button id="btn" onclick="send()">Отправить</button>
+  <div class="result" id="result"></div>
+</div>
+<script>
+async function send() {
+  const text = document.getElementById('msg').value.trim();
+  if (!text) return;
+  const btn = document.getElementById('btn');
+  const res = document.getElementById('result');
+  btn.disabled = true;
+  btn.textContent = 'Отправляю...';
+  res.style.display = 'none';
+  try {
+    const r = await fetch('/api/admin/broadcast', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      res.className = 'result ok';
+      res.textContent = `Отправлено: ${d.sent} чат(ов), ошибок: ${d.failed}`;
+    } else {
+      res.className = 'result err';
+      res.textContent = `Ошибка: ${d.reason || 'неизвестная'}`;
+    }
+  } catch {
+    res.className = 'result err';
+    res.textContent = 'Ошибка соединения';
+  }
+  res.style.display = 'block';
+  btn.disabled = false;
+  btn.textContent = 'Отправить';
+}
+</script>
+</body>
+</html>

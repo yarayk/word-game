@@ -92,7 +92,7 @@ async def _route_command(
     app: Application,
 ) -> None:
     if text.startswith("/start_game"):
-        await handle_start_game(chat_id, app)
+        await handle_start_game(chat_id, user_id, first_name, username, app)
     elif text.startswith("/join"):
         await handle_join(chat_id, user_id, first_name, username, app)
     elif text.startswith("/begin"):
@@ -144,7 +144,13 @@ async def handle_bot_added(chat_id: int, app: Application) -> None:
     )
 
 
-async def handle_start_game(chat_id: int, app: Application) -> None:
+async def handle_start_game(
+    chat_id: int,
+    user_id: int,
+    first_name: str,
+    username: str | None,
+    app: Application,
+) -> None:
     game = await app.store.game_service.start_game(chat_id)
     if game is None:
         await app.store.tg_client.send_message(
@@ -153,8 +159,13 @@ async def handle_start_game(chat_id: int, app: Application) -> None:
         )
         return
 
+    _, _ = await app.store.game_service.join_game(
+        chat_id, user_id, first_name, username
+    )
+    players = await app.store.game.get_active_players(game.id)
+
     message_id = await app.store.tg_client.send_message(
-        chat_id, _build_lobby_text([]), _LOBBY_KEYBOARD
+        chat_id, _build_lobby_text(players), _LOBBY_KEYBOARD
     )
     if message_id:
         game.lobby_message_id = message_id

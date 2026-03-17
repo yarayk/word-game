@@ -25,10 +25,14 @@ h1{font-size:1.5rem;font-weight:700;color:#4f8ef7;margin-bottom:8px}
 <p class="subtitle">Все доступные эндпоинты</p>
 <div class="endpoints">
   <a class="endpoint" href="/stats"><span class="method get">GET</span><span class="path">/stats</span><span class="desc">Страница статистики</span></a>
+  <a class="endpoint" href="/stop-games"><span class="method get">GET</span><span class="path">/stop-games</span><span class="desc">Страница управления играми — выбор и остановка</span></a>
+  <a class="endpoint" href="/api/admin/broadcast"><span class="method get">GET</span><span class="path">/broadcast</span><span class="desc">Страница рассылки сообщений во все чаты</span></a>
   <a class="endpoint" href="/api/admin/games"><span class="method get">GET</span><span class="path">/api/admin/games</span><span class="desc">Список всех игр (с пагинацией: ?page=1&amp;per_page=20)</span></a>
   <a class="endpoint" href="/api/admin/games/1"><span class="method get">GET</span><span class="path">/api/admin/games/{id}</span><span class="desc">Детали игры: игроки и использованные слова</span></a>
   <a class="endpoint" href="/api/admin/stats"><span class="method get">GET</span><span class="path">/api/admin/stats</span><span class="desc">Глобальная статистика (JSON)</span></a>
-  <div class="endpoint"><span class="method post">POST</span><span class="path">/api/admin/games/{id}/stop</span><span class="desc">Принудительно остановить игру</span></div>
+  <div class="endpoint"><span class="method post">POST</span><span class="path">/api/admin/games/{id}/stop</span><span class="desc">Принудительно остановить игру (JSON API)</span></div>
+  <div class="endpoint"><span class="method post">POST</span><span class="path">/api/admin/games/stop_all</span><span class="desc">Остановить все активные игры (JSON API)</span></div>
+  <div class="endpoint"><span class="method post">POST</span><span class="path">/api/admin/broadcast</span><span class="desc">Отправить сообщение во все чаты (JSON: {"text": "..."})</span></div>
 </div>
 </body>
 </html>
