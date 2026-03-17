@@ -78,7 +78,7 @@ class Poller:
                                 update.message.chat.id,
                                 "⚠️ Что-то пошло не так. Попробуй ещё раз.",
                             )
-                        except Exception:
+                        except Exception:  # noqa: BLE001, S110
                             pass
 
     async def _handle_update(self, update) -> None:

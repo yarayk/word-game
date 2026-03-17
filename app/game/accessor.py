@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.store.database.models import Game, GameStatus, Player, UsedWord, Vote
@@ -219,16 +219,22 @@ class GameAccessor:
         """Возвращает агрегированную статистику по всем играм."""
         async with self.get_session() as session:
             total_games = await session.scalar(select(func.count(Game.id))) or 0
-            finished_games = await session.scalar(
-                select(func.count(Game.id)).where(
-                    Game.status == GameStatus.FINISHED
+            finished_games = (
+                await session.scalar(
+                    select(func.count(Game.id)).where(
+                        Game.status == GameStatus.FINISHED
+                    )
                 )
-            ) or 0
-            active_games = await session.scalar(
-                select(func.count(Game.id)).where(
-                    Game.status != GameStatus.FINISHED
+                or 0
+            )
+            active_games = (
+                await session.scalar(
+                    select(func.count(Game.id)).where(
+                        Game.status != GameStatus.FINISHED
+                    )
                 )
-            ) or 0
+                or 0
+            )
             total_words = (
                 await session.scalar(select(func.count(UsedWord.id))) or 0
             )
@@ -257,3 +263,9 @@ class GameAccessor:
             "total_words": total_words,
             "top_players": top_players,
         }
+
+    async def get_all_chat_ids(self) -> list[int]:
+        """Возвращает уникальные chat_id всех чатов где когда-либо была игра."""
+        async with self.get_session() as session:
+            result = await session.execute(select(distinct(Game.chat_id)))
+            return list(result.scalars().all())

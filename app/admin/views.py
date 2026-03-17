@@ -14,6 +14,10 @@ from app.admin.schema import (
 )
 
 _TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
+_ADMIN_STOP_MSG = (
+    "🛑 Игра была остановлена администратором.\n"
+    "Вы можете начать новую игру с помощью /start_game!"
+)
 
 
 def _render(name: str) -> str:
@@ -117,6 +121,64 @@ class StatsView(web.View):
         return web.json_response(asdict(schema))
 
 
+def stop_games_page(request: web.Request) -> web.Response:
+    return web.Response(
+        text=_render("stop_games.html"), content_type="text/html"
+    )
+
+
+class BroadcastView(web.View):
+    async def get(self) -> web.Response:
+        return web.Response(
+            text=_render("broadcast.html"), content_type="text/html"
+        )
+
+    async def post(self) -> web.Response:
+        data = await self.request.json()
+        text = (data.get("text") or "").strip()
+        if not text:
+            return web.json_response(
+                {"ok": False, "reason": "empty_message"}, status=400
+            )
+
+        chat_ids = await self.request.app.store.game.get_all_chat_ids()
+        if not chat_ids:
+            return web.json_response({"ok": True, "sent": 0, "failed": 0})
+
+        sent = 0
+        failed = 0
+        for chat_id in chat_ids:
+            try:
+                await self.request.app.store.tg_client.send_message(
+                    chat_id=chat_id, text=text
+                )
+                sent += 1
+            except Exception:  # noqa: BLE001
+                failed += 1
+
+        return web.json_response({"ok": True, "sent": sent, "failed": failed})
+
+
+class GamesStopAllView(web.View):
+    async def post(self) -> web.Response:
+        active_games = await self.request.app.store.game.get_all_active_games()
+        if not active_games:
+            return web.json_response({"ok": True, "stopped": 0})
+
+        stopped = 0
+        for game in active_games:
+            result = await self.request.app.store.game_service.stop_game(
+                game.chat_id
+            )
+            if result["ok"]:
+                stopped += 1
+                await self.request.app.store.tg_client.send_message(
+                    chat_id=game.chat_id, text=_ADMIN_STOP_MSG
+                )
+
+        return web.json_response({"ok": True, "stopped": stopped})
+
+
 class GameStopView(web.View):
     async def post(self) -> web.Response:
         game_id = int(self.request.match_info["id"])
@@ -131,6 +193,10 @@ class GameStopView(web.View):
             return web.json_response(
                 {"ok": False, "reason": "no_active_game"}, status=400
             )
+
+        await self.request.app.store.tg_client.send_message(
+            chat_id=game.chat_id, text=_ADMIN_STOP_MSG
+        )
 
         return web.json_response(
             {
